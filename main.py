@@ -9,28 +9,26 @@ import random
 class Gomoku:
     def __init__(self, board_size=15):
         self.board_size = board_size
-        self.board = np.zeros((board_size, board_size), dtype=int)  # 0 空位，1 黑棋，2 白棋
-        self.current_player = 1  # 黑棋先手
+        self.board = np.zeros((board_size, board_size), dtype=int)  # 0: empty, 1: black, 2: white
+        self.current_player = 1  # Black starts first
 
     def get_valid_actions(self):
-        """返回所有空位作为合法动作。"""
-        actions = [(i, j) for i in range(self.board_size) for j in range(self.board_size) if self.board[i, j] == 0]
+        """Return all empty positions as valid actions."""
+        actions = []
+        for i in range(self.board_size):
+            for j in range(self.board_size):
+                if self.board[i, j] == 0:  # Select only empty positions
+                    actions.append((i, j))
         return actions
 
     def play_move(self, action):
-        """执行给定动作。"""
+        """Execute the given action."""
         x, y = action
         self.board[x, y] = self.current_player
-        self.current_player = 3 - self.current_player  # 切换玩家
-
-    def undo_move(self, action):
-        """撤销给定动作。"""
-        x, y = action
-        self.board[x, y] = 0
-        self.current_player = 3 - self.current_player  # 切换回前一玩家
+        self.current_player = 3 - self.current_player  # Switch player
 
     def check_winner(self):
-        """检查当前棋盘是否有胜者（五子连珠）。"""
+        """Check if there is a winner (five in a row)."""
         directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
         for x in range(self.board_size):
             for y in range(self.board_size):
@@ -47,22 +45,21 @@ class Gomoku:
                             break
                     if count >= 5:
                         return player
-        if not any(0 in row for row in self.board):  # 棋盘已满
-            return 0  # 平局
-        return -1  # 游戏未结束
+        if not any(0 in row for row in self.board):  # Board is full
+            return 0  # Draw
+        return -1  # Game not finished
 
     def display(self):
-        """打印棋盘。"""
+        """Print the board."""
         for row in self.board:
             print(" ".join(str(x) if x > 0 else "." for x in row))
         print()
 
 
 class AOAP_MCTS_Gomoku:
-    def __init__(self, gomoku, n_rollouts=100, n0=10, epsilon=1e-5, prior_mean=0, prior_variance=10):
+    def __init__(self, gomoku, n_rollouts=100, epsilon=1e-5, prior_mean=0, prior_variance=10):
         self.gomoku = gomoku
         self.n_rollouts = n_rollouts
-        self.n0 = n0
         self.epsilon = epsilon
         self.prior_mean = prior_mean
         self.prior_variance = prior_variance
@@ -71,7 +68,7 @@ class AOAP_MCTS_Gomoku:
         self.children = defaultdict(list)
 
     def expand_node(self, node):
-        """扩展节点，添加所有可能动作。"""
+        """Expand a node by adding all possible actions."""
         if node not in self.children:
             actions = self.gomoku.get_valid_actions()
             self.children[node] = actions
@@ -80,7 +77,7 @@ class AOAP_MCTS_Gomoku:
                 self.tree[child_node]
 
     def aoap_select(self, node):
-        """使用 AOAP 策略选择最佳动作。"""
+        """Use AOAP strategy to select the best action."""
         actions = self.children[node]
         max_vfa = -np.inf
         best_action = None
@@ -100,17 +97,21 @@ class AOAP_MCTS_Gomoku:
         return best_action
 
     def default_policy(self):
-        """随机模拟到游戏结束并返回奖励。"""
-        while self.gomoku.check_winner() == -1:
-            actions = self.gomoku.get_valid_actions()
-            action = random.choice(actions)
-            self.gomoku.play_move(action)
+        """Simulate to the end of the game randomly and return the reward."""
+        simulated_board = Gomoku(self.gomoku.board_size)
+        simulated_board.board = self.gomoku.board.copy()
+        simulated_board.current_player = self.gomoku.current_player
 
-        winner = self.gomoku.check_winner()
+        while simulated_board.check_winner() == -1:
+            actions = simulated_board.get_valid_actions()
+            action = random.choice(actions)
+            simulated_board.play_move(action)
+
+        winner = simulated_board.check_winner()
         return 1 if winner == 2 else (-1 if winner == 1 else 0)
 
     def backpropagate(self, search_path, reward):
-        """回溯更新路径中所有节点的统计值。"""
+        """Backpropagate the reward and update statistics for all nodes in the path."""
         for node in reversed(search_path):
             self.tree[node]['visits'] += 1
             old_mean = self.tree[node]['value']
@@ -121,78 +122,98 @@ class AOAP_MCTS_Gomoku:
                                            (reward - old_mean) * (reward - self.tree[node]['value'])) / visits
 
     def tree_policy(self, node):
-        """从根节点沿树策略选择路径。"""
+        """Select a path from the root using the tree policy."""
         search_path = []
+        simulated_board = Gomoku(self.gomoku.board_size)
+        simulated_board.board = self.gomoku.board.copy()
+        simulated_board.current_player = self.gomoku.current_player
+
         while node in self.children and len(self.children[node]) > 0:
             search_path.append(node)
             action = self.aoap_select(node)
-            self.gomoku.play_move(action)  # 修复 eval 问题
+            simulated_board.play_move(action)
             node = f"{node}-{action}"
 
         return node, search_path
 
     def run(self):
-        """运行 AOAP-MCTS 算法。"""
+        """Run the AOAP-MCTS algorithm."""
         root = 'root'
         self.expand_node(root)
 
         for _ in range(self.n_rollouts):
-            self.gomoku = Gomoku(self.gomoku.board_size)  # 重置游戏
+            simulated_gomoku = Gomoku(self.gomoku.board_size)
+            simulated_gomoku.board = self.gomoku.board.copy()
+            simulated_gomoku.current_player = self.gomoku.current_player
+            self.gomoku = simulated_gomoku
+
             leaf, search_path = self.tree_policy(root)
             self.expand_node(leaf)
             reward = self.default_policy()
             self.backpropagate(search_path, reward)
 
         best_action = max(self.children[root], key=lambda a: self.tree[f"{root}-{a}"]['value'])
+        valid_actions = self.gomoku.get_valid_actions()
+        if best_action not in valid_actions:
+            print(f"Warning: MCTS selected an illegal action {best_action}, choosing a random valid action!")
+            best_action = random.choice(valid_actions)  # Fallback to a random valid action
+
         return best_action
 
 
 def simulate_games(n_games=100):
-    """模拟白棋与随机黑棋对战100次。"""
+    """Simulate 100 games where white uses MCTS and black plays randomly."""
     white_wins = 0
     black_wins = 0
     draws = 0
 
     for game_idx in range(1, n_games + 1):
-        print(f"游戏 {game_idx} 开始")
-        gomoku = Gomoku(board_size=15)
-        mcts = AOAP_MCTS_Gomoku(gomoku, n_rollouts=500)
+        print(f"Game {game_idx} starts")
+        real_gomoku = Gomoku(board_size=15)
+        mcts = AOAP_MCTS_Gomoku(real_gomoku, n_rollouts=500)
 
-        while gomoku.check_winner() == -1:
-            # 黑棋随机下
-            actions = gomoku.get_valid_actions()
+        while real_gomoku.check_winner() == -1:
+            # Black moves randomly
+            actions = real_gomoku.get_valid_actions()
             black_action = random.choice(actions)
-            gomoku.play_move(black_action)
-            print("黑棋落子:", black_action)
-            gomoku.display()
+            real_gomoku.play_move(black_action)
+            print("Black plays:", black_action)
+            real_gomoku.display()
 
-            # 检查胜负
-            if gomoku.check_winner() != -1:
+            # Check for game result
+            if real_gomoku.check_winner() != -1:
                 break
 
-            # 白棋通过 MCTS 决策
+            # White moves using MCTS
+            mcts.gomoku.board = real_gomoku.board.copy()  # Sync game state to the simulator
+            mcts.gomoku.current_player = real_gomoku.current_player
             best_action = mcts.run()
-            gomoku.play_move(best_action)
-            print("白棋落子:", best_action)
-            gomoku.display()
+            real_gomoku.play_move(best_action)
+            print("White plays:", best_action)
+            real_gomoku.display()
 
-        # 显示本局结果
-        winner = gomoku.check_winner()
+        # Display the result of the game
+        winner = real_gomoku.check_winner()
         if winner == 1:
-            print("本局结果: 黑棋胜利!")
+            # print("本局结果: 黑棋胜利!")
+            print("Result: Black wins!")
             black_wins += 1
         elif winner == 2:
-            print("本局结果: 白棋胜利!")
+            # print("本局结果: 白棋胜利!")
+            print("Result: White wins!")
             white_wins += 1
         else:
-            print("本局结果: 平局!")
+            # print("本局结果: 平局!")
+            print("Result: Draw!")
             draws += 1
 
         print("-" * 30)
 
-    # 显示最终统计
-    print(f"白棋胜利: {white_wins}, 黑棋胜利: {black_wins}, 平局: {draws}")
+    # Display final statistics
+    # print(f"白棋胜利: {white_wins}, 黑棋胜利: {black_wins}, 平局: {draws}")
+    print(f"White wins: {white_wins}, Black wins: {black_wins}, Draws: {draws}")
 
 
 if __name__ == "__main__":
     simulate_games()
+
