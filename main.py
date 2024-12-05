@@ -5,6 +5,8 @@ import numpy as np
 from collections import defaultdict
 import random
 
+from scipy.special import stirling2
+
 
 class Gomoku:
     def __init__(self, board_size=15):
@@ -100,8 +102,6 @@ class AOAP_MCTS_Gomoku:
         """Simulate to the end of the game randomly and return the reward."""
         simulated_board = Gomoku(self.gomoku.board_size)
         simulated_board.board = self.gomoku.board.copy()
-        simulated_board.current_player = self.gomoku.current_player
-
         while simulated_board.check_winner() == -1:
             actions = simulated_board.get_valid_actions()
             action = random.choice(actions)
@@ -126,8 +126,6 @@ class AOAP_MCTS_Gomoku:
         search_path = []
         simulated_board = Gomoku(self.gomoku.board_size)
         simulated_board.board = self.gomoku.board.copy()
-        simulated_board.current_player = self.gomoku.current_player
-
         while node in self.children and len(self.children[node]) > 0:
             search_path.append(node)
             action = self.aoap_select(node)
@@ -142,11 +140,6 @@ class AOAP_MCTS_Gomoku:
         self.expand_node(root)
 
         for _ in range(self.n_rollouts):
-            simulated_gomoku = Gomoku(self.gomoku.board_size)
-            simulated_gomoku.board = self.gomoku.board.copy()
-            simulated_gomoku.current_player = self.gomoku.current_player
-            self.gomoku = simulated_gomoku
-
             leaf, search_path = self.tree_policy(root)
             self.expand_node(leaf)
             reward = self.default_policy()
@@ -170,7 +163,6 @@ def simulate_games(n_games=100):
     for game_idx in range(1, n_games + 1):
         print(f"Game {game_idx} starts")
         real_gomoku = Gomoku(board_size=15)
-        mcts = AOAP_MCTS_Gomoku(real_gomoku, n_rollouts=500)
 
         while real_gomoku.check_winner() == -1:
             # Black moves randomly
@@ -178,19 +170,16 @@ def simulate_games(n_games=100):
             black_action = random.choice(actions)
             real_gomoku.play_move(black_action)
             print("Black plays:", black_action)
-            real_gomoku.display()
 
             # Check for game result
             if real_gomoku.check_winner() != -1:
                 break
-
+            mcts = AOAP_MCTS_Gomoku(real_gomoku, n_rollouts=500)
             # White moves using MCTS
-            mcts.gomoku.board = real_gomoku.board.copy()  # Sync game state to the simulator
-            mcts.gomoku.current_player = real_gomoku.current_player
             best_action = mcts.run()
             real_gomoku.play_move(best_action)
             print("White plays:", best_action)
-            real_gomoku.display()
+            #real_gomoku.display()
 
         # Display the result of the game
         winner = real_gomoku.check_winner()
